@@ -495,10 +495,6 @@ else:
             fig_area.update_layout(template="plotly_dark", height=350)
             st.plotly_chart(fig_area, use_container_width=True)
 
-        st.subheader("🌐 Tỷ lệ IPv4 / IPv6")
-        fig_ipver = px.pie(filtered_df, names="ip_version", hole=0.4)
-        st.plotly_chart(fig_ipver, use_container_width=True)
-
         c_left, c_right = st.columns(2)
         with c_left:
             st.subheader("🏆 Top Nguồn (Source)")
@@ -564,7 +560,9 @@ else:
                     )
                 ]
             )
-            fig_sankey.update_layout(height=500)
+            fig_sankey.update_layout(
+                height=500, font=dict(size=20)  # 👈 áp dụng cho toàn bộ chữ
+            )
             st.plotly_chart(fig_sankey, use_container_width=True)
 
             st.subheader("🕸️ Ma trận trao đổi (Heatmap)")
@@ -592,6 +590,12 @@ else:
             st.plotly_chart(fig_pie, use_container_width=True)
 
         with c2:
+            st.subheader("Tỷ lệ IPv4 / IPv6")
+            fig_ipver = px.pie(filtered_df, names="ip_version", hole=0.4)
+            st.plotly_chart(fig_ipver, use_container_width=True)
+
+        c1, c2 = st.columns(2)
+        with c1:
             st.subheader("Top Ports")
             port_counts = (
                 filtered_df[filtered_df["dst_port"] != 0]["dst_port"]
@@ -603,12 +607,12 @@ else:
                 port_counts.head(10), x="Port", y="Count", text="Count", color="Count"
             )
             st.plotly_chart(fig_bar, use_container_width=True)
-
-        st.subheader("Phân bố kích thước gói tin")
-        fig_hist = px.histogram(
-            filtered_df, x="length", nbins=30, color_discrete_sequence=["#FF4B4B"]
-        )
-        st.plotly_chart(fig_hist, use_container_width=True)
+        with c2:
+            st.subheader("Phân bố kích thước gói tin")
+            fig_hist = px.histogram(
+                filtered_df, x="length", nbins=30, color_discrete_sequence=["#FF4B4B"]
+            )
+            st.plotly_chart(fig_hist, use_container_width=True)
 
     # ==============================
     # TRANG 4: SOI GÓI TIN (INSPECTOR)
