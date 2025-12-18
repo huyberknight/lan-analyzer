@@ -519,27 +519,29 @@ else:
         c_left, c_right = st.columns(2)
         with c_left:
             st.subheader("🏆 Top Nguồn (Source)")
-            top_src = filtered_df["src_ip"].value_counts().head(5)
+            top_src = filtered_df["src_ip"].value_counts().head(5).reset_index()
+            top_src.columns = ["Source IP", "Packets"]
             st.dataframe(top_src, use_container_width=True)
 
         with c_right:
             st.subheader("🎯 Top Đích (Destination)")
-            top_dst = filtered_df["dst_ip"].value_counts().head(5)
+            top_dst = filtered_df["dst_ip"].value_counts().head(5).reset_index()
+            top_dst.columns = ["Destination IP", "Packets"]
             st.dataframe(top_dst, use_container_width=True)
 
         c_left, c_right = st.columns(2)
 
         with c_left:
             st.subheader("🔌 Top MAC nguồn")
-            st.dataframe(
-                filtered_df["src_mac"].value_counts().head(5), use_container_width=True
-            )
+            top_src_mac = filtered_df["src_mac"].value_counts().head(5).reset_index()
+            top_src_mac.columns = ["Source MAC", "Packets"]
+            st.dataframe(top_src_mac, use_container_width=True)
 
         with c_right:
             st.subheader("🎯 Top MAC đích")
-            st.dataframe(
-                filtered_df["dst_mac"].value_counts().head(5), use_container_width=True
-            )
+            top_dst_mac = filtered_df["dst_mac"].value_counts().head(5).reset_index()
+            top_dst_mac.columns = ["Destination MAC", "Packets"]
+            st.dataframe(top_dst_mac, use_container_width=True)
 
     # ==============================
     # TRANG 2: PHÂN TÍCH LUỒNG
@@ -663,27 +665,44 @@ else:
             "%H:%M:%S.%f"
         )
 
+        log_view = log_view.rename(
+            columns={
+                "timestamp": "Timestamp",
+                "src_mac": "Src MAC",
+                "dst_mac": "Dst MAC",
+                "src_ip": "Src IP",
+                "dst_ip": "Dst IP",
+                "ip_version": "IP Version",
+                "application": "Application",
+                "length": "Length",
+            }
+        )
+
         with col_sel:
             st.subheader("🖹 Logs")
+
+            log_view_sorted = log_view.sort_index(ascending=False)
+
             st.dataframe(
-                log_view.sort_index(ascending=False),
+                log_view_sorted,
                 height=600,
                 use_container_width=True,
             )
 
-            # Chọn index theo iloc (vị trí dòng)
-            max_idx = len(filtered_df) - 1
-            pkt_id = st.number_input(
-                "Chọn Index gói tin (0 - {}):".format(max_idx),
-                min_value=0,
-                max_value=max_idx,
-                value=0,
+            # Chọn packet theo index thực trong DataFrame
+            selected_idx = st.selectbox(
+                "🔎 Chọn gói tin",
+                options=log_view_sorted.index.tolist(),
+                format_func=lambda i: (
+                    f"#{i} | {log_view_sorted.loc[i, 'Timestamp']} | "
+                    f"{log_view_sorted.loc[i, 'Src IP']} ➝ {log_view_sorted.loc[i, 'Dst IP']}"
+                ),
             )
 
         with col_data:
-            if not filtered_df.empty and 0 <= pkt_id < len(filtered_df):
-                st.subheader(f"Chi tiết: Packet #{pkt_id}")
-                pkt = filtered_df.iloc[pkt_id]
+            if not filtered_df.empty and selected_idx in filtered_df.index:
+                st.subheader(f"Chi tiết gói tin (Packet ID: {selected_idx})")
+                pkt = filtered_df.loc[selected_idx]
 
                 st.markdown(
                     f"""
