@@ -421,7 +421,7 @@ with st.sidebar:
         if "application" in df.columns:
             unique_apps = df["application"].unique()
             selected_apps = st.multiselect(
-                "Giao thức L7",
+                "🖥️ Giao thức L7",
                 unique_apps,
                 default=unique_apps,
             )
@@ -590,8 +590,11 @@ else:
             st.plotly_chart(fig_pie, use_container_width=True)
 
         with c2:
-            st.subheader("Tỷ lệ IPv4 / IPv6")
-            fig_ipver = px.pie(filtered_df, names="ip_version", hole=0.4)
+            st.subheader("📡 Phân bố IP Version")
+            fig_ipver = px.pie(
+                filtered_df, names="ip_version", values="length", hole=0.4
+            )
+
             st.plotly_chart(fig_ipver, use_container_width=True)
 
         c1, c2 = st.columns(2)
