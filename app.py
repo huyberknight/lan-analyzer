@@ -94,6 +94,7 @@ try:
             transport String,
             application String,
 
+            src_port UInt16,
             dst_port UInt16,
             length UInt32,
             payload String
@@ -108,7 +109,6 @@ try:
             session_id UUID,
             start_time DateTime64(3),
             end_time Nullable(DateTime64(3)),
-            iface String,
             packet_limit UInt16,
             timeout UInt16,
             total_packets UInt32,
@@ -136,7 +136,7 @@ def generate_lan_traffic_from_scapy(iface=None, packet_limit=100, timeout=10):
 
     ch_client.insert(
         "capture_sessions",
-        [[session_id, start_time, None, iface, packet_limit, timeout, 0, 0]],
+        [[session_id, start_time, None, packet_limit, timeout, 0, 0]],
     )
 
     # Thanh tiến trình
@@ -188,9 +188,11 @@ def generate_lan_traffic_from_scapy(iface=None, packet_limit=100, timeout=10):
                     application = "Ping"
                 elif pkt.haslayer(TCP):
                     transport = "TCP"
+                    src_port = pkt[TCP].sport
                     dst_port = pkt[TCP].dport
                 elif pkt.haslayer(UDP):
                     transport = "UDP"
+                    src_port = pkt[UDP].sport
                     dst_port = pkt[UDP].dport
 
             # ===== IPv6 =====
@@ -201,9 +203,11 @@ def generate_lan_traffic_from_scapy(iface=None, packet_limit=100, timeout=10):
 
                 if pkt.haslayer(TCP):
                     transport = "TCP"
+                    src_port = pkt[TCP].sport
                     dst_port = pkt[TCP].dport
                 elif pkt.haslayer(UDP):
                     transport = "UDP"
+                    src_port = pkt[UDP].sport
                     dst_port = pkt[UDP].dport
 
             # ===== LOGIC Application detect =====
@@ -255,6 +259,7 @@ def generate_lan_traffic_from_scapy(iface=None, packet_limit=100, timeout=10):
                         ip_version,
                         transport,
                         application,
+                        src_port,
                         dst_port,
                         length,
                         payload_hex,
@@ -354,7 +359,7 @@ with st.sidebar:
     # =====================
     sessions = ch_client.query_df(
         """
-        SELECT session_id, start_time, iface, total_packets
+        SELECT session_id, start_time, total_packets
         FROM capture_sessions
         ORDER BY start_time DESC
         """
@@ -656,6 +661,8 @@ else:
                 "dst_mac",
                 "src_ip",
                 "dst_ip",
+                "src_port",
+                "dst_port",
                 "ip_version",
                 "application",
                 "length",
@@ -672,6 +679,8 @@ else:
                 "dst_mac": "Dst MAC",
                 "src_ip": "Src IP",
                 "dst_ip": "Dst IP",
+                "src_port": "Src Port",
+                "dst_port": "Dst Port",
                 "ip_version": "IP Version",
                 "application": "Application",
                 "length": "Length",
