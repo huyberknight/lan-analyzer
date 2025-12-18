@@ -6,6 +6,27 @@ import plotly.express as px
 import plotly.graph_objects as go
 import binascii
 import clickhouse_connect
+import ipaddress
+import requests
+
+
+def is_public_ip(ip):
+    try:
+        return ipaddress.ip_address(ip).is_global
+    except:
+        return False
+
+
+IPINFO_TOKEN = "434052a9178d5f"
+
+
+def lookup_ipinfo(ip):
+    url = f"https://ipinfo.io/{ip}?token={IPINFO_TOKEN}"
+    r = requests.get(url, timeout=3)
+    if r.status_code == 200:
+        return r.json()
+    return None
+
 
 # ==============================
 # 1. CẤU HÌNH & GIAO DIỆN
@@ -302,7 +323,7 @@ def generate_lan_traffic_from_scapy(iface=None, packet_limit=100, timeout=10):
 # ==============================
 with st.sidebar:
     st.title("🕸️ LAN Analyzer")
-    st.caption("Scapy Real-time Sniffer")
+    # st.caption("Scapy Real-time Sniffer")
     st.markdown("---")
 
     # =====================
@@ -643,7 +664,7 @@ else:
         )
 
         with col_sel:
-            st.subheader("Logs")
+            st.subheader("🖹 Logs")
             st.dataframe(
                 log_view.sort_index(ascending=False),
                 height=600,
@@ -723,3 +744,57 @@ else:
                     st.info("ℹ️ Gói tin này không có Payload (Raw Data).")
             else:
                 st.info("Vui lòng chọn gói tin hợp lệ.")
+
+        st.subheader("🌍 IP Intelligence")
+
+        src_ip = pkt["src_ip"]
+        dst_ip = pkt["dst_ip"]
+
+        c_ip1, c_ip2 = st.columns(2)
+
+        # ===== SRC IP =====
+        with c_ip1:
+            st.markdown("### 🟢 Source IP")
+            if is_public_ip(src_ip):
+                info = lookup_ipinfo(src_ip)
+                if info and "loc" in info:
+                    lat, lon = map(float, info["loc"].split(","))
+                    st.map(pd.DataFrame({"lat": [lat], "lon": [lon]}))
+
+                    st.write(f"**IP:** {info.get('ip', 'N/A')}")
+                    st.write(f"**Hostname:** {info.get('hostname', 'N/A')}")
+                    st.write(f"**City:** {info.get('city', 'N/A')}")
+                    st.write(f"**Region:** {info.get('region', 'N/A')}")
+                    st.write(f"**Country:** {info.get('country', 'N/A')}")
+                    st.write(f"**Location:** {info.get('loc', 'N/A')}")
+                    st.write(f"**ASN / Org:** {info.get('org', 'N/A')}")
+                    st.write(f"**Postal:** {info.get('postal', 'N/A')}")
+                    st.write(f"**Timezone:** {info.get('timezone', 'N/A')}")
+
+                else:
+                    st.warning("Không lấy được thông tin IP.")
+            else:
+                st.info("📡 IP nội bộ (Private / LAN) – không có ASN & Geo")
+
+        # ===== DST IP =====
+        with c_ip2:
+            st.markdown("### 🔵 Destination IP")
+            if is_public_ip(dst_ip):
+                info = lookup_ipinfo(dst_ip)
+                if info and "loc" in info:
+                    lat, lon = map(float, info["loc"].split(","))
+                    st.map(pd.DataFrame({"lat": [lat], "lon": [lon]}))
+
+                    st.write(f"**IP:** {info.get('ip', 'N/A')}")
+                    st.write(f"**Hostname:** {info.get('hostname', 'N/A')}")
+                    st.write(f"**City:** {info.get('city', 'N/A')}")
+                    st.write(f"**Region:** {info.get('region', 'N/A')}")
+                    st.write(f"**Country:** {info.get('country', 'N/A')}")
+                    st.write(f"**Location:** {info.get('loc', 'N/A')}")
+                    st.write(f"**ASN / Org:** {info.get('org', 'N/A')}")
+                    st.write(f"**Postal:** {info.get('postal', 'N/A')}")
+                    st.write(f"**Timezone:** {info.get('timezone', 'N/A')}")
+                else:
+                    st.warning("Không lấy được thông tin IP.")
+            else:
+                st.info("📡 IP nội bộ (Private / LAN) – không có ASN & Geo")
