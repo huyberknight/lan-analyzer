@@ -1,7 +1,6 @@
-from scapy.all import sniff, ARP, IP, ICMP, TCP, UDP, Raw, conf
+from scapy.all import sniff, ARP, IP, ICMP, TCP, UDP, Raw, Ether, IPv6
 import streamlit as st
 import pandas as pd
-import numpy as np
 import datetime as dt
 import plotly.express as px
 import plotly.graph_objects as go
@@ -60,17 +59,42 @@ try:
     ch_client.command(
         """
         CREATE TABLE IF NOT EXISTS lan_packets (
+            session_id UUID,
             timestamp DateTime64(3),
+
             src_ip String,
             dst_ip String,
+
+            src_mac String,
+            dst_mac String,
+
+            ip_version Enum8('IPv4' = 4, 'IPv6' = 6, 'ARP' = 1, 'Other' = 0),
+
             transport String,
             application String,
+
             dst_port UInt16,
             length UInt32,
             payload String
         ) ENGINE = MergeTree()
         ORDER BY timestamp
-    """
+        """
+    )
+
+    ch_client.command(
+        """
+        CREATE TABLE IF NOT EXISTS capture_sessions (
+            session_id UUID,
+            start_time DateTime64(3),
+            end_time Nullable(DateTime64(3)),
+            iface String,
+            packet_limit UInt16,
+            timeout UInt16,
+            total_packets UInt32,
+            total_bytes UInt64
+        ) ENGINE = MergeTree()
+        ORDER BY start_time;
+        """
     )
 
 except Exception as e:
@@ -82,12 +106,25 @@ except Exception as e:
 # 2. XỬ LÝ DỮ LIỆU SCAPY
 # ==============================
 def generate_lan_traffic_from_scapy(iface=None, packet_limit=100, timeout=10):
+
+    # Tạo session
+    import uuid
+
+    session_id = uuid.uuid4()
+    start_time = dt.datetime.now()
+
+    ch_client.insert(
+        "capture_sessions",
+        [[session_id, start_time, None, iface, packet_limit, timeout, 0, 0]],
+    )
+
     # Thanh tiến trình
     progress_bar = st.progress(0)
     status_text = st.empty()
 
     # Biến đếm cục bộ để update progress bar
     packet_count_local = [0]
+    byte_count_local = [0]
 
     def process_packet(pkt):
         timestamp = dt.datetime.now()
@@ -95,6 +132,9 @@ def generate_lan_traffic_from_scapy(iface=None, packet_limit=100, timeout=10):
         # Giá trị mặc định
         src_ip = "Unknown"
         dst_ip = "Unknown"
+        src_mac = "Unknown"
+        dst_mac = "Unknown"
+        ip_version = "Other"
         transport = "Other"
         application = "Other"
         dst_port = 0
@@ -102,61 +142,76 @@ def generate_lan_traffic_from_scapy(iface=None, packet_limit=100, timeout=10):
         payload_hex = ""
 
         try:
+            # ===== Ethernet =====
+            if pkt.haslayer(Ether):
+                src_mac = pkt[Ether].src
+                dst_mac = pkt[Ether].dst
+
             # ===== ARP =====
             if pkt.haslayer(ARP):
+                ip_version = "ARP"
                 transport = "ARP"
                 src_ip = pkt[ARP].psrc
                 dst_ip = pkt[ARP].pdst
-                length = 64
                 application = "ARP Request/Reply"
+                length = 64
 
-            # ===== IP BASE =====
-            elif pkt.haslayer(IP):
+            # ===== IPv4 =====
+            if pkt.haslayer(IP):
+                ip_version = "IPv4"
                 src_ip = pkt[IP].src
                 dst_ip = pkt[IP].dst
 
-                # ICMP
                 if pkt.haslayer(ICMP):
                     transport = "ICMP"
                     application = "Ping"
-
-                # TCP
                 elif pkt.haslayer(TCP):
                     transport = "TCP"
                     dst_port = pkt[TCP].dport
-
-                # UDP
                 elif pkt.haslayer(UDP):
                     transport = "UDP"
                     dst_port = pkt[UDP].dport
 
-                # ===== LOGIC Application detect =====
-                if dst_port > 0 and application == "Other":
-                    port_map = {
-                        80: "HTTP",
-                        8080: "HTTP",
-                        8000: "HTTP",
-                        8888: "HTTP",
-                        443: "HTTPS",
-                        8443: "HTTPS",
-                        53: "DNS",
-                        445: "SMB",
-                        139: "SMB",
-                        22: "SSH",
-                        23: "Telnet",
-                        3389: "RDP",
-                        20: "FTP",
-                        21: "FTP",
-                        25: "SMTP",
-                        110: "POP3",
-                        143: "IMAP",
-                        67: "DHCP",
-                        68: "DHCP",
-                        123: "NTP",
-                    }
-                    application = port_map.get(
-                        dst_port, f"Unknown App (Port {dst_port})"
-                    )
+            # ===== IPv6 =====
+            elif pkt.haslayer(IPv6):
+                ip_version = "IPv6"
+                src_ip = pkt[IPv6].src
+                dst_ip = pkt[IPv6].dst
+
+                if pkt.haslayer(TCP):
+                    transport = "TCP"
+                    dst_port = pkt[TCP].dport
+                elif pkt.haslayer(UDP):
+                    transport = "UDP"
+                    dst_port = pkt[UDP].dport
+
+            # ===== LOGIC Application detect =====
+            if dst_port > 0 and application == "Other":
+                port_map = {
+                    80: "HTTP",
+                    8080: "HTTP",
+                    8000: "HTTP",
+                    8888: "HTTP",
+                    443: "HTTPS",
+                    8443: "HTTPS",
+                    53: "DNS",
+                    445: "SMB",
+                    139: "SMB",
+                    22: "SSH",
+                    23: "Telnet",
+                    3389: "RDP",
+                    20: "FTP",
+                    21: "FTP",
+                    25: "SMTP",
+                    110: "POP3",
+                    143: "IMAP",
+                    67: "DHCP",
+                    68: "DHCP",
+                    123: "NTP",
+                }
+                application = port_map.get(dst_port, f"Unknown App (Port {dst_port})")
+
+            byte_count_local[0] += length
 
             # ===== Payload =====
             if pkt.haslayer(Raw):
@@ -166,15 +221,17 @@ def generate_lan_traffic_from_scapy(iface=None, packet_limit=100, timeout=10):
                 payload_hex = binascii.hexlify(raw_bytes).decode("utf-8")
 
             # ===== INSERT CLICKHOUSE =====
-            # Lưu ý: Insert từng dòng (row-by-row) có thể chậm với traffic lớn,
-            # nhưng phù hợp với demo realtime.
             ch_client.insert(
                 "lan_packets",
                 [
                     [
+                        session_id,
                         timestamp,
                         src_ip,
                         dst_ip,
+                        src_mac,
+                        dst_mac,
+                        ip_version,
                         transport,
                         application,
                         dst_port,
@@ -207,6 +264,26 @@ def generate_lan_traffic_from_scapy(iface=None, packet_limit=100, timeout=10):
             count=packet_limit,
             timeout=timeout,
         )
+
+        end_time = dt.datetime.now()
+
+        ch_client.command(
+            """
+            ALTER TABLE capture_sessions
+            UPDATE
+                end_time = %(end)s,
+                total_packets = %(pkts)s,
+                total_bytes = %(bytes)s
+            WHERE session_id = %(sid)s
+            """,
+            parameters={
+                "end": end_time,
+                "pkts": packet_count_local[0],
+                "bytes": byte_count_local[0],
+                "sid": session_id,
+            },
+        )
+
         progress_bar.progress(1.0)
         status_text.text("Hoàn tất!")
 
@@ -217,38 +294,20 @@ def generate_lan_traffic_from_scapy(iface=None, packet_limit=100, timeout=10):
     except Exception as e:
         st.error(f"❌ Lỗi Scapy: {e}")
 
-    return True  # Trả về True khi xong
+    return session_id
 
-
-df = ch_client.query_df(
-    """
-                    SELECT *
-                    FROM lan_packets
-                    ORDER BY timestamp DESC
-                    LIMIT 1000
-                """
-)
 
 # ==============================
 # 3. SIDEBAR ĐIỀU HƯỚNG
 # ==============================
 with st.sidebar:
-    if "traffic_data" not in st.session_state:
-        df = ch_client.query_df(
-            """
-            SELECT *
-            FROM lan_packets
-            ORDER BY timestamp DESC
-            LIMIT 1000
-        """
-        )
-        if not df.empty:
-            st.session_state["traffic_data"] = df
-
     st.title("🕸️ LAN Analyzer")
     st.caption("Scapy Real-time Sniffer")
     st.markdown("---")
 
+    # =====================
+    # CẤU HÌNH SCAN
+    # =====================
     st.subheader("⚙️ Cấu hình Bắt gói tin")
 
     target_iface = st.text_input("Interface (VD: eth0, Wi-Fi)", value="")
@@ -256,23 +315,86 @@ with st.sidebar:
     capture_time = st.slider("Thời gian timeout (giây)", 5, 60, 10)
 
     if st.button("🚀 Bắt đầu Scan", type="primary"):
-        with st.spinner("Đang khởi tạo Scapy và bắt gói tin..."):
-            # [FIX] Bỏ comment dòng này để thực sự bắt gói tin
-            generate_lan_traffic_from_scapy(
-                iface=target_iface, packet_limit=packet_count, timeout=capture_time
+        with st.spinner("Đang bắt gói tin..."):
+            current_session = generate_lan_traffic_from_scapy(
+                iface=target_iface,
+                packet_limit=packet_count,
+                timeout=capture_time,
             )
+            # 🔑 lưu session vừa quét
+            st.session_state["active_session"] = current_session
+            st.session_state["view_mode"] = "📌 Đợt được chọn"
+            st.success("✅ Hoàn tất thu thập dữ liệu")
 
-            # Sau khi bắt xong, query lại từ DB để hiển thị
-            df = ch_client.query_df(
-                """
-                    SELECT *
-                    FROM lan_packets
-                    ORDER BY timestamp DESC
-                    LIMIT 1000
-                """
-            )
-            st.session_state["traffic_data"] = df
-            st.success(f"Đã cập nhật dữ liệu! Tổng số dòng trong view: {len(df)}")
+    st.markdown("---")
+
+    # =====================
+    # DANH SÁCH SESSION
+    # =====================
+    sessions = ch_client.query_df(
+        """
+        SELECT session_id, start_time, iface, total_packets
+        FROM capture_sessions
+        ORDER BY start_time DESC
+        """
+    )
+
+    if sessions.empty:
+        st.info("📂 Chưa có đợt thu thập nào")
+        selected_session = None
+    else:
+        session_ids = sessions["session_id"].tolist()
+
+        # 🔑 tự động chọn session vừa scan
+        default_index = 0
+        if "active_session" in st.session_state:
+            try:
+                default_index = session_ids.index(st.session_state["active_session"])
+            except ValueError:
+                pass
+
+        selected_session = st.selectbox(
+            "📂 Chọn đợt thu thập",
+            options=session_ids,
+            index=default_index,
+            format_func=lambda x: (
+                f"Session {str(x)[:8]} | "
+                f"{sessions.loc[sessions.session_id == x, 'start_time'].values[0]}"
+            ),
+        )
+
+    # =====================
+    # CHẾ ĐỘ XEM
+    # =====================
+    view_mode = st.radio(
+        "Chế độ xem",
+        ["📌 Đợt được chọn", "📊 Tổng tất cả đợt"],
+        key="view_mode",
+    )
+
+    # =====================
+    # QUERY DỮ LIỆU (CHỈ 1 CHỖ)
+    # =====================
+    if view_mode == "📌 Đợt được chọn" and selected_session is not None:
+        df = ch_client.query_df(
+            """
+            SELECT *
+            FROM lan_packets
+            WHERE session_id = %(sid)s
+            ORDER BY timestamp DESC
+            """,
+            parameters={"sid": selected_session},
+        )
+    else:
+        df = ch_client.query_df(
+            """
+            SELECT *
+            FROM lan_packets
+            ORDER BY timestamp DESC
+            """
+        )
+
+    st.session_state["traffic_data"] = df
 
     st.markdown("---")
 
@@ -304,12 +426,21 @@ with st.sidebar:
                 default=unique_apps,
             )
             filtered_df = df[df["application"].isin(selected_apps)]
+        if "ip_version" in df.columns:
+            ip_versions = df["ip_version"].unique().tolist()
+            selected_ip_versions = st.multiselect(
+                "🌐 Phiên bản IP", ip_versions, default=ip_versions
+            )
+            filtered_df = filtered_df[
+                filtered_df["ip_version"].isin(selected_ip_versions)
+            ]
         else:
             filtered_df = df
     else:
         df = pd.DataFrame()
         filtered_df = pd.DataFrame()
         st.info("👈 Bấm 'Bắt đầu Scan' để thu thập dữ liệu.")
+
 
 # ==============================
 # LOGIC CHÍNH
@@ -364,6 +495,10 @@ else:
             fig_area.update_layout(template="plotly_dark", height=350)
             st.plotly_chart(fig_area, use_container_width=True)
 
+        st.subheader("🌐 Tỷ lệ IPv4 / IPv6")
+        fig_ipver = px.pie(filtered_df, names="ip_version", hole=0.4)
+        st.plotly_chart(fig_ipver, use_container_width=True)
+
         c_left, c_right = st.columns(2)
         with c_left:
             st.subheader("🏆 Top Nguồn (Source)")
@@ -374,6 +509,20 @@ else:
             st.subheader("🎯 Top Đích (Destination)")
             top_dst = filtered_df["dst_ip"].value_counts().head(5)
             st.dataframe(top_dst, use_container_width=True)
+
+        c_left, c_right = st.columns(2)
+
+        with c_left:
+            st.subheader("🔌 Top MAC nguồn")
+            st.dataframe(
+                filtered_df["src_mac"].value_counts().head(5), use_container_width=True
+            )
+
+        with c_right:
+            st.subheader("🎯 Top MAC đích")
+            st.dataframe(
+                filtered_df["dst_mac"].value_counts().head(5), use_container_width=True
+            )
 
     # ==============================
     # TRANG 2: PHÂN TÍCH LUỒNG
@@ -471,7 +620,16 @@ else:
 
         # Chuẩn bị view
         log_view = filtered_df[
-            ["timestamp", "src_ip", "dst_ip", "application", "length"]
+            [
+                "timestamp",
+                "src_mac",
+                "dst_mac",
+                "src_ip",
+                "dst_ip",
+                "ip_version",
+                "application",
+                "length",
+            ]
         ].copy()
         log_view["timestamp"] = pd.to_datetime(log_view["timestamp"]).dt.strftime(
             "%H:%M:%S.%f"
@@ -501,11 +659,13 @@ else:
 
                 st.markdown(
                     f"""
-                <div style="padding: 15px; border-radius: 5px; border-left: 5px solid #00cc96; background-color: #262730;">
+                <div style="padding: 15px; border-radius: 5px; border-left: 5px solid #00cc96;">
                     <span class="header-style">{pkt['transport']} / {pkt['application']}</span><br>
                     <b>Time:</b> {pkt['timestamp']}<br>
                     <b>Length:</b> {pkt['length']} Bytes<br>
-                    <b>Flow:</b> {pkt['src_ip']} ➝ {pkt['dst_ip']}:{pkt['dst_port']}
+                    <b>Flow:</b> {pkt['src_ip']} ➝ {pkt['dst_ip']}:{pkt['dst_port']}<br>
+                    <b>MAC:</b> {pkt['src_mac']} ➝ {pkt['dst_mac']}<br>
+                    <b>IP ({pkt['ip_version']}):</b> {pkt['src_ip']} ➝ {pkt['dst_ip']}<br>
                 </div>
                 """,
                     unsafe_allow_html=True,
