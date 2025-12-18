@@ -56,9 +56,6 @@ try:
         host="localhost", port=8123, username="default", password="", database="default"
     )
 
-    # ch_client.command("""DROP TABLE IF EXISTS lan_packets;""")
-    # ch_client.command("""DROP TABLE IF EXISTS capture_sessions;""")
-
     ch_client.command(
         """
         CREATE TABLE IF NOT EXISTS lan_packets (
@@ -277,76 +274,81 @@ def generate_lan_traffic_from_scapy(iface=None, packet_limit=100, timeout=10):
 # 3. SIDEBAR ĐIỀU HƯỚNG
 # ==============================
 with st.sidebar:
-    if "traffic_data" not in st.session_state:
-        df = ch_client.query_df(
-            """
-            SELECT *
-            FROM lan_packets
-            ORDER BY timestamp DESC
-            """
-        )
-        if not df.empty:
-            st.session_state["traffic_data"] = df
-
     st.title("🕸️ LAN Analyzer")
     st.caption("Scapy Real-time Sniffer")
     st.markdown("---")
 
+    # =====================
+    # CẤU HÌNH SCAN
+    # =====================
     st.subheader("⚙️ Cấu hình Bắt gói tin")
 
     target_iface = st.text_input("Interface (VD: eth0, Wi-Fi)", value="")
     packet_count = st.slider("Số lượng gói tối đa", 10, 500, 50)
     capture_time = st.slider("Thời gian timeout (giây)", 5, 60, 10)
 
+    if st.button("🚀 Bắt đầu Scan", type="primary"):
+        with st.spinner("Đang bắt gói tin..."):
+            current_session = generate_lan_traffic_from_scapy(
+                iface=target_iface,
+                packet_limit=packet_count,
+                timeout=capture_time,
+            )
+            # 🔑 lưu session vừa quét
+            st.session_state["active_session"] = current_session
+            st.session_state["view_mode"] = "📌 Đợt được chọn"
+            st.success("✅ Hoàn tất thu thập dữ liệu")
+
+    st.markdown("---")
+
+    # =====================
+    # DANH SÁCH SESSION
+    # =====================
     sessions = ch_client.query_df(
         """
-        SELECT
-            session_id,
-            start_time,
-            iface,
-            total_packets
+        SELECT session_id, start_time, iface, total_packets
         FROM capture_sessions
         ORDER BY start_time DESC
         """
     )
 
-    if st.button("🚀 Bắt đầu Scan", type="primary"):
-        with st.spinner("Đang khởi tạo Scapy và bắt gói tin..."):
-            current_session = generate_lan_traffic_from_scapy(
-                iface=target_iface, packet_limit=packet_count, timeout=capture_time
-            )
-
-            # Sau khi bắt xong, query lại từ DB để hiển thị
-            df = ch_client.query_df(
-                """
-                SELECT *
-                FROM lan_packets
-                WHERE session_id = %(sid)s
-                ORDER BY timestamp DESC
-                """,
-                parameters={"sid": current_session},
-            )
-            st.session_state["traffic_data"] = df
-            st.success(f"Đã cập nhật dữ liệu! Tổng số dòng trong view: {len(df)}")
-
-    st.markdown("---")
-
     if sessions.empty:
         st.info("📂 Chưa có đợt thu thập nào")
         selected_session = None
     else:
+        session_ids = sessions["session_id"].tolist()
+
+        # 🔑 tự động chọn session vừa scan
+        default_index = 0
+        if "active_session" in st.session_state:
+            try:
+                default_index = session_ids.index(st.session_state["active_session"])
+            except ValueError:
+                pass
+
         selected_session = st.selectbox(
             "📂 Chọn đợt thu thập",
-            options=sessions["session_id"].tolist(),
+            options=session_ids,
+            index=default_index,
             format_func=lambda x: (
                 f"Session {str(x)[:8]} | "
                 f"{sessions.loc[sessions.session_id == x, 'start_time'].values[0]}"
             ),
         )
 
-    view_mode = st.radio("Chế độ xem", ["📌 Đợt được chọn", "📊 Tổng tất cả đợt"])
+    # =====================
+    # CHẾ ĐỘ XEM
+    # =====================
+    view_mode = st.radio(
+        "Chế độ xem",
+        ["📌 Đợt được chọn", "📊 Tổng tất cả đợt"],
+        key="view_mode",
+    )
 
-    if view_mode == "📌 Đợt được chọn":
+    # =====================
+    # QUERY DỮ LIỆU (CHỈ 1 CHỖ)
+    # =====================
+    if view_mode == "📌 Đợt được chọn" and selected_session is not None:
         df = ch_client.query_df(
             """
             SELECT *
@@ -366,6 +368,8 @@ with st.sidebar:
         )
 
     st.session_state["traffic_data"] = df
+
+    st.markdown("---")
 
     menu = st.radio(
         "Chế độ phân tích:",
