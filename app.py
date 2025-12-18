@@ -20,6 +20,7 @@ def is_public_ip(ip):
 IPINFO_TOKEN = "434052a9178d5f"
 
 
+@st.cache_data(ttl=3600)
 def lookup_ipinfo(ip):
     url = f"https://ipinfo.io/{ip}?token={IPINFO_TOKEN}"
     r = requests.get(url, timeout=3)
@@ -158,6 +159,7 @@ def generate_lan_traffic_from_scapy(iface=None, packet_limit=100, timeout=10):
         ip_version = "Other"
         transport = "Other"
         application = "Other"
+        src_port = 0
         dst_port = 0
         length = len(pkt)
         payload_hex = ""
@@ -175,10 +177,10 @@ def generate_lan_traffic_from_scapy(iface=None, packet_limit=100, timeout=10):
                 src_ip = pkt[ARP].psrc
                 dst_ip = pkt[ARP].pdst
                 application = "ARP Request/Reply"
-                length = 64
+                # length = 64
 
             # ===== IPv4 =====
-            if pkt.haslayer(IP):
+            elif pkt.haslayer(IP):
                 ip_version = "IPv4"
                 src_ip = pkt[IP].src
                 dst_ip = pkt[IP].dst
@@ -277,7 +279,7 @@ def generate_lan_traffic_from_scapy(iface=None, packet_limit=100, timeout=10):
                 )
 
         except Exception as e:
-            pass
+            st.error(f"Lỗi xử lý packet: {e}")
 
     try:
         actual_iface = iface if iface and iface.strip() != "" else None
@@ -443,7 +445,8 @@ with st.sidebar:
         st.markdown("---")
         st.caption("Bộ lọc hiển thị:")
 
-        # Sửa lỗi: Check nếu cột application tồn tại
+        filtered_df = df.copy()
+
         if "application" in df.columns:
             unique_apps = df["application"].unique()
             selected_apps = st.multiselect(
@@ -451,7 +454,7 @@ with st.sidebar:
                 unique_apps,
                 default=unique_apps,
             )
-            filtered_df = df[df["application"].isin(selected_apps)]
+            filtered_df = filtered_df[filtered_df["application"].isin(selected_apps)]
         if "ip_version" in df.columns:
             ip_versions = df["ip_version"].unique().tolist()
             selected_ip_versions = st.multiselect(
@@ -460,8 +463,6 @@ with st.sidebar:
             filtered_df = filtered_df[
                 filtered_df["ip_version"].isin(selected_ip_versions)
             ]
-        else:
-            filtered_df = df
     else:
         df = pd.DataFrame()
         filtered_df = pd.DataFrame()
@@ -498,9 +499,9 @@ else:
             t_start = pd.to_datetime(filtered_df["timestamp"].min())
             t_end = pd.to_datetime(filtered_df["timestamp"].max())
             total_time = (t_end - t_start).total_seconds()
-            c4.metric("Time tổng", f"{total_time:.2f} s")
+            c4.metric("Thời gian", f"{total_time:.2f} s")
         else:
-            c4.metric("Time tổng", "0 s")
+            c4.metric("Thời gian", "0 s")
 
         st.subheader("📈 Băng thông theo thời gian thực")
         if not filtered_df.empty:
@@ -774,6 +775,10 @@ else:
                 st.info("Vui lòng chọn gói tin hợp lệ.")
 
         st.subheader("🌍 IP Intelligence")
+
+        if "pkt" not in locals():
+            st.info("🔎 Vui lòng chọn một gói tin để xem IP Intelligence")
+            st.stop()
 
         src_ip = pkt["src_ip"]
         dst_ip = pkt["dst_ip"]
